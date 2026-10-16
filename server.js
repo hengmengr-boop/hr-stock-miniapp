@@ -1,6 +1,6 @@
 'use strict';
 require('dotenv').config();
-const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const express = require('express');
@@ -16,10 +16,11 @@ const {
   BOT_TOKEN, PORT = 3000,
   NOTIFY_CHAT_ID, MENTIONS = '', CONTACT_NAME = '',
   AUTO_NOTIFY = 'false', SELF_REGISTER = 'true',
+  TZ_NAME = 'Asia/Phnom_Penh',
 } = process.env;
 
 if (!BOT_TOKEN || !hasDbConfig()) {
-  console.error('Missing BOT_TOKEN or database settings in .env. Run: npm run setup');
+  console.error('Missing BOT_TOKEN or database settings (DATABASE_URL or DB_*). Locally run: npm run setup');
   process.exit(1);
 }
 
@@ -27,11 +28,20 @@ if (!BOT_TOKEN || !hasDbConfig()) {
 pg.types.setTypeParser(1082, (v) => v);
 pg.types.setTypeParser(1700, parseFloat);
 
-const pool = new pg.Pool(poolConfig());
+const pool = new pg.Pool({
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+  ...poolConfig(),
+});
+// An idle client dropping its connection must never crash the server
+pool.on('error', (e) => console.error('pg pool error:', e.code || e.message));
 const q = (text, params) => pool.query(text, params);
 
+let ready = false; // true once the database is reachable and the schema exists
+
 const app = express();
-app.set('trust proxy', 1);
+app.set('trust proxy', 1); // Railway / Cloudflare / Nginx in front
 const server = http.createServer(app);
 const io = new Server(server);
 
@@ -50,9 +60,23 @@ app.use(helmet({
   },
 }));
 app.use(compression());
+// Revalidate on every load (ETag) so Telegram never shows a stale app.js after a deploy
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: true }));
+
+// Health check (used by Railway/Render/Docker). Not rate limited, not behind the API gate.
+app.get('/health', async (_req, res) => {
+  try { await q('SELECT 1'); res.status(ready ? 200 : 503).json({ ok: ready }); }
+  catch { res.status(503).json({ ok: false }); }
+});
+
 app.use(express.json({ limit: '50kb' }));
+// While the database is still starting, answer clearly instead of crashing or hanging
+app.use('/api', (_req, res, next) =>
+  ready ? next() : res.status(503).json({ error: 'Server is starting, please try again in a moment' }));
 app.use('/api', rateLimit({ windowMs: 60_000, max: 240, standardHeaders: true, legacyHeaders: false }));
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
+// Reject bad ids (e.g. /api/requests/abc) with 400 instead of a database error
+app.param('id', (_req, res, next, id) =>
+  /^\d{1,9}$/.test(id) ? next() : res.status(400).json({ error: 'Invalid id' }));
 
 /* ---------------------------- Telegram auth ---------------------------- */
 async function getOrCreateUser(tg) {
@@ -71,7 +95,7 @@ async function getOrCreateUser(tg) {
   return rows[0].is_active ? rows[0] : null;
 }
 
-const ah = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 const auth = ah(async (req, res, next) => {
   const raw = (req.headers.authorization || '').replace(/^tma /, '');
@@ -88,9 +112,19 @@ const pub = (u) => ({ id: u.id, full_name: u.full_name, position: u.position, de
 const getView = async (id) => (await q('SELECT * FROM v_requests WHERE id=$1', [id])).rows[0];
 const canModify = (u, r) => isAdmin(u) || (r.requester_id === u.id && r.status === 'Open');
 
+// "Current month" in the business time zone (not UTC), so on the 1st of the
+// month before 07:00 Phnom Penh time you still see the right month.
+function currentMonth() {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: TZ_NAME, year: 'numeric', month: '2-digit' })
+      .formatToParts(new Date());
+    const get = (t) => parts.find((p) => p.type === t).value;
+    return `${get('year')}-${get('month')}`;
+  } catch { return new Date().toISOString().slice(0, 7); }
+}
 function monthOf(req) {
   const m = req.query.month;
-  return /^\d{4}-\d{2}$/.test(m || '') ? m : new Date().toISOString().slice(0, 7);
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(m || '') ? m : currentMonth();
 }
 function scope(req) {
   const p = [monthOf(req) + '-01'];
@@ -108,6 +142,7 @@ async function sendNotification(r) {
     const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: NOTIFY_CHAT_ID, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+      signal: AbortSignal.timeout(10_000), // never hang if Telegram is slow
     });
     const j = await res.json();
     ok = j.ok; messageId = j.result?.message_id || null; errText = j.ok ? null : j.description;
@@ -117,11 +152,12 @@ async function sendNotification(r) {
   if (!ok) throw new Error('Telegram: ' + errText);
 }
 
-const broadcast = (action, id) => io.emit('requests:changed', { action, id });
+// Send realtime events only to the people who can see the request:
+// all admins + the person who owns it (not to every connected user).
+const broadcast = (action, row) =>
+  io.to('admins').to(`user:${row.requester_id}`).emit('requests:changed', { action, id: row.id });
 
 /* ------------------------------ REST API ------------------------------ */
-app.get('/health', ah(async (_req, res) => { await q('SELECT 1'); res.json({ ok: true }); }));
-
 app.get('/api/me', auth, ah(async (req, res) => {
   const [d, u] = await Promise.all([
     q('SELECT id, name FROM departments WHERE is_active ORDER BY name'),
@@ -164,7 +200,7 @@ app.post('/api/requests', auth, ah(async (req, res) => {
     [req.user.id, v.requester_name, req.user.position, v.department_id, v.item, v.qty, v.uom_id,
      v.total, v.request_date, v.status, v.remark]);
   const row = await getView(ins.rows[0].id);
-  broadcast('created', row.id);
+  broadcast('created', row);
   if (AUTO_NOTIFY === 'true') sendNotification(row).catch((e) => console.error('auto notify:', e.message));
   res.status(201).json({ row });
 }));
@@ -175,13 +211,13 @@ app.put('/api/requests/:id', auth, ah(async (req, res) => {
   if (!canModify(req.user, cur)) return res.status(403).json({ error: 'You cannot edit this request' });
   const { err, v } = validate(req.body, req.user);
   if (err.length) return res.status(400).json({ error: 'Invalid: ' + err.join(', ') });
-  if (!isAdmin(req.user)) v.status = cur.status;
+  if (!isAdmin(req.user)) v.status = cur.status; // only admins can open/close
   await q(
     `UPDATE requests SET requester_name=$2, department_id=$3, item=$4, qty=$5, uom_id=$6, total=$7,
             request_date=$8, status=$9, remark=$10, updated_by=$11 WHERE id=$1`,
     [cur.id, v.requester_name, v.department_id, v.item, v.qty, v.uom_id, v.total,
      v.request_date, v.status, v.remark, req.user.id]);
-  broadcast('updated', cur.id);
+  broadcast('updated', cur);
   res.json({ row: await getView(cur.id) });
 }));
 
@@ -190,7 +226,7 @@ app.delete('/api/requests/:id', auth, ah(async (req, res) => {
   if (!cur) return res.status(404).json({ error: 'Not found' });
   if (!canModify(req.user, cur)) return res.status(403).json({ error: 'You cannot delete this request' });
   await q('DELETE FROM requests WHERE id=$1', [cur.id]);
-  broadcast('deleted', cur.id);
+  broadcast('deleted', cur);
   res.json({ ok: true });
 }));
 
@@ -205,13 +241,21 @@ app.post('/api/requests/:id/notify', auth, ah(async (req, res) => {
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => {
+  if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Request too large' });
+  // Bad data that reached the database (wrong type, unknown department/unit, out of range)
+  if (['22P02', '23503', '23514', '22003', '22007'].includes(err.code)) {
+    return res.status(400).json({ error: 'Invalid data' });
+  }
   console.error(err);
-  res.status(500).json({ error: err.message?.startsWith('Telegram:') || err.message?.includes('NOTIFY') ? err.message : 'Server error' });
+  const safe = err.message?.startsWith('Telegram:') || err.message?.includes('NOTIFY');
+  res.status(500).json({ error: safe ? err.message : 'Server error' });
 });
 
 /* ------------------------------ Realtime ------------------------------ */
 io.use(async (socket, next) => {
   try {
+    if (!ready) return next(new Error('starting'));
     const tg = verifyInitData(socket.handshake.auth?.initData, BOT_TOKEN);
     if (!tg) return next(new Error('unauthorized'));
     const user = await getOrCreateUser(tg);
@@ -221,9 +265,63 @@ io.use(async (socket, next) => {
   } catch (e) { next(new Error('server')); }
 });
 
+io.on('connection', (socket) => {
+  const u = socket.data.user;
+  socket.join(`user:${u.id}`);
+  if (isAdmin(u)) socket.join('admins');
+});
+
 /* ------------------------------- Startup ------------------------------ */
+async function waitForDb(tries = 30) {
+  for (let i = 1; i <= tries; i++) {
+    try { await q('SELECT 1'); return; }
+    catch (e) {
+      console.log(`Waiting for database (${i}/${tries}): ${e.code || e.message}`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  throw new Error('Database is not reachable. Check DATABASE_URL / DB_* settings.');
+}
+
+// On a brand-new database (e.g. first deploy on Railway) create the tables automatically.
+async function ensureSchema() {
+  const client = await pool.connect();
+  try {
+    await client.query('SELECT pg_advisory_lock(727001)'); // safe if two instances start together
+    const { rows } = await client.query(`SELECT to_regclass('public.requests') AS t`);
+    if (rows[0].t) return;
+    const file = path.join(__dirname, 'schema.sql');
+    if (!fs.existsSync(file)) { console.warn('Tables missing and schema.sql not found - skipping'); return; }
+    console.log('Empty database detected: applying schema.sql');
+    await client.query(fs.readFileSync(file, 'utf8'));
+  } finally {
+    await client.query('SELECT pg_advisory_unlock(727001)').catch(() => {});
+    client.release();
+  }
+}
+
+// Listen immediately so the platform health check passes, then prepare the database.
 server.listen(PORT, () => console.log(`HR Stock Mini App listening on :${PORT}`));
-const shutdown = () => { io.close(); server.close(() => pool.end().then(() => process.exit(0))); setTimeout(() => process.exit(1), 10_000).unref(); };
+(async () => {
+  try {
+    await waitForDb();
+    await ensureSchema();
+    ready = true;
+    console.log('Database ready');
+  } catch (e) {
+    console.error('Startup failed:', e.message);
+    process.exit(1);
+  }
+})();
+
+let closing = false;
+const shutdown = () => {
+  if (closing) return;
+  closing = true;
+  console.log('Shutting down...');
+  io.close(() => pool.end().finally(() => process.exit(0))); // also closes the HTTP server
+  setTimeout(() => process.exit(1), 10_000).unref();
+};
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
-   git add .
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e));
