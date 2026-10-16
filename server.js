@@ -226,3 +226,4 @@ server.listen(PORT, () => console.log(`HR Stock Mini App listening on :${PORT}`)
 const shutdown = () => { io.close(); server.close(() => pool.end().then(() => process.exit(0))); setTimeout(() => process.exit(1), 10_000).unref(); };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+   git add .

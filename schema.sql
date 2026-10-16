@@ -188,7 +188,11 @@ GROUP BY 1, 2;
 -- 9. Seed data
 -- ---------------------------------------------------------------------
 INSERT INTO departments (name) VALUES
-    ('HR/Admin'), ('Procurement'), ('Finance'), ('IT'), ('Operations'), ('Sales');
+    ('HR/Admin'), ('Procurement'), ('Finance'), ('IT'), ('Operations'), ('Sales') , ('Marketing'), ('Logistics'), ('Customer Service'),
+    ('Research & Development'), ('Quality Assurance'), ('Production'), ('Maintenance'), ('Supply Chain'), ('Business Development'),
+    ('Accounting'), ('Human Resources'), ('Project Management'), ('Engineering'), ('Design'), ('Customer Support'), ('Data Analysis'), ('Content Creation'), ('Event Planning'), ('Strategic Planning'),
+    ('Operations Management'), ('Business Intelligence'), ('Digital Marketing'), ('E-commerce'), ('Social Media Management'), ('Public Affairs'), ('Corporate Communications'), ('Training & Development'),
+    ('Facilities Management'), ('Procurement & Supply Chain'), ('System Support');
 
 INSERT INTO uoms (code) VALUES
     ('PCS'), ('BOX'), ('PACK'), ('SET'), ('ROLL'), ('BOTTLE'), ('REAM');
