@@ -92,13 +92,18 @@ app.post('/telegram/webhook', async (req, res) => {
   if (!match || message.from?.is_bot) return res.sendStatus(200);
   if (match[1] && match[1].toLowerCase() !== BOT_USERNAME.toLowerCase()) return res.sendStatus(200);
 
+  const sender = message.from || {};
+  const telegramName = [sender.first_name, sender.last_name]
+    .filter(Boolean).join(' ').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 80)
+    || (sender.username ? `@${sender.username}` : 'អ្នក');
+
   try {
     const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: message.chat.id,
-        text: '🌿 HR Stock · ស្នើសុំសម្ភារៈ\n\nបង្កើតសំណើថ្មី ឬពិនិត្យស្ថានភាពរបស់អ្នកក្នុងកម្មវិធី។ ចុចប៊ូតុងខាងក្រោមដើម្បីបើក HR Stock។',
+        text: `👋 សួស្តី ${telegramName}\n🤖 HR Stock · ស្នើសុំសម្ភារៈ\n\nបង្កើតសំណើថ្មី ឬពិនិត្យស្ថានភាពរបស់អ្នកក្នុងកម្មវិធី។\nចុចប៊ូតុងខាងក្រោមដើម្បីបើក HR Stock។`,
         reply_markup: {
           inline_keyboard: [[{
             text: '📦 បើក HR Stock',
