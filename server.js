@@ -1,6 +1,7 @@
 'use strict';
 require('dotenv').config();
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const http = require('http');
 const express = require('express');
@@ -18,6 +19,12 @@ const {
   AUTO_NOTIFY = 'false', SELF_REGISTER = 'true',
   TZ_NAME = 'Asia/Phnom_Penh',
 } = process.env;
+
+const BOT_USERNAME = (process.env.BOT_USERNAME || 'HR_Stock123_bot').replace(/^@/, '');
+// Telegram's webhook secret is derived from the bot token, so no extra secret
+// needs to be copied into Render. Telegram only accepts URL-safe characters here.
+const TELEGRAM_WEBHOOK_SECRET = crypto.createHmac('sha256', BOT_TOKEN || '')
+  .update('hr-stock-miniapp-webhook').digest('hex');
 
 if (!BOT_TOKEN || !hasDbConfig()) {
   console.error('Missing BOT_TOKEN or database settings (DATABASE_URL or DB_*). Locally run: npm run setup');
@@ -70,6 +77,46 @@ app.get('/health', async (_req, res) => {
 });
 
 app.use(express.json({ limit: '50kb' }));
+
+// Telegram group commands arrive here after setWebhook is configured at startup.
+app.post('/telegram/webhook', async (req, res) => {
+  const supplied = Buffer.from(req.get('x-telegram-bot-api-secret-token') || '');
+  const expected = Buffer.from(TELEGRAM_WEBHOOK_SECRET);
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    return res.sendStatus(403);
+  }
+
+  const message = req.body?.message;
+  const text = message?.text || '';
+  const match = text.match(/^\/start(?:@([A-Za-z0-9_]+))?(?:\s|$)/i);
+  if (!match || message.from?.is_bot) return res.sendStatus(200);
+  if (match[1] && match[1].toLowerCase() !== BOT_USERNAME.toLowerCase()) return res.sendStatus(200);
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: message.chat.id,
+        text: '🌿 HR Stock · ស្នើសុំសម្ភារៈ\n\nបង្កើតសំណើថ្មី ឬពិនិត្យស្ថានភាពរបស់អ្នកក្នុងកម្មវិធី។ ចុចប៊ូតុងខាងក្រោមដើម្បីបើក HR Stock។',
+        reply_markup: {
+          inline_keyboard: [[{
+            text: '📦 បើក HR Stock',
+            // A Main Mini App deep link works from groups and retains Telegram auth.
+            url: `https://t.me/${BOT_USERNAME}?startapp`,
+          }]],
+        },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const result = await response.json();
+    if (!result.ok) console.error('Telegram /start reply failed:', result.description || response.status);
+  } catch (e) {
+    console.error('Telegram /start reply failed:', e.message);
+  }
+  return res.sendStatus(200);
+});
+
 // While the database is still starting, answer clearly instead of crashing or hanging
 app.use('/api', (_req, res, next) =>
   ready ? next() : res.status(503).json({ error: 'Server is starting, please try again in a moment' }));
@@ -300,6 +347,24 @@ async function ensureSchema() {
   }
 }
 
+async function registerTelegramWebhook() {
+  const publicUrl = process.env.RENDER_EXTERNAL_URL;
+  if (!publicUrl) return; // Local development does not have a public Telegram webhook URL.
+  const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url: `${publicUrl.replace(/\/+$/, '')}/telegram/webhook`,
+      secret_token: TELEGRAM_WEBHOOK_SECRET,
+      allowed_updates: ['message'],
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const result = await response.json();
+  if (!result.ok) throw new Error(result.description || 'Telegram setWebhook failed');
+  console.log('Telegram group command webhook configured');
+}
+
 // Listen immediately so the platform health check passes, then prepare the database.
 server.listen(PORT, () => console.log(`HR Stock Mini App listening on :${PORT}`));
 (async () => {
@@ -308,6 +373,8 @@ server.listen(PORT, () => console.log(`HR Stock Mini App listening on :${PORT}`)
     await ensureSchema();
     ready = true;
     console.log('Database ready');
+    try { await registerTelegramWebhook(); }
+    catch (e) { console.error('Telegram webhook setup failed:', e.message); }
   } catch (e) {
     console.error('Startup failed:', e.message);
     process.exit(1);
