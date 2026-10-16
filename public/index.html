@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Smart HR Stock</title>
+<link rel="stylesheet" href="/app.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<main id="app">
+
+  <header class="card hdr">
+    <div class="avatar" id="avatar">?</div>
+    <div class="grow">
+      <div class="name" id="meName">Loading…</div>
+      <div class="sub">Stock HR Admin Request</div>
+    </div>
+    <span class="chip" id="conn"><i></i><b>Offline</b></span>
+  </header>
+
+  <section class="stats">
+    <button class="stat" data-f="all"><span>Total this month</span><strong id="sTotal">0</strong></button>
+    <button class="stat" data-f="Open"><span>Open</span><strong class="warn" id="sOpen">0</strong></button>
+    <button class="stat" data-f="Close"><span>Closed</span><strong class="ok" id="sClosed">0</strong></button>
+  </section>
+
+  <section class="card">
+    <div class="fhead">
+      <div><small>Stock HR Admin Request</small><h2 id="formTitle">New</h2></div>
+      <div class="icon">📦</div>
+    </div>
+
+    <fieldset id="formSet">
+      <h3>Requester</h3>
+      <div class="row">
+        <label>Name<input id="fName" maxlength="150" autocomplete="off"></label>
+        <label>Department<select id="fDept"></select></label>
+      </div>
+
+      <h3>Item</h3>
+      <label>Item<input id="fItem" maxlength="255" autocomplete="off"></label>
+      <div class="row3">
+        <label>Qty
+          <div class="stepper">
+            <button type="button" id="qMinus">−</button>
+            <input id="fQty" type="number" inputmode="decimal" min="0.01" step="any" value="1">
+            <button type="button" id="qPlus">+</button>
+          </div>
+        </label>
+        <label>UOM<select id="fUom"></select></label>
+        <label>Total<input id="fTotal" type="number" inputmode="decimal" min="0" step="any" value="1"></label>
+      </div>
+      <p class="hint">Total defaults to quantity. You can change it.</p>
+
+      <h3>Details</h3>
+      <div class="row">
+        <label>Date<input id="fDate" type="date"></label>
+        <div class="lbl">Status
+          <div class="seg" id="seg">
+            <button type="button" data-v="Open" class="on">Open</button>
+            <button type="button" data-v="Close">Close</button>
+          </div>
+        </div>
+      </div>
+      <label>Remark<textarea id="fRemark" rows="3" maxlength="2000">N/A</textarea></label>
+      <p class="hint">Add details the approver should know.</p>
+    </fieldset>
+
+    <button class="link" id="btnNotify" type="button">Send Telegram notification</button>
+  </section>
+
+  <section class="list">
+    <div class="lhead">
+      <div><small id="count">0 results</small><h2>Requests</h2></div>
+      <button class="sq" id="btnRefresh" aria-label="Refresh">⟳</button>
+    </div>
+    <input id="search" class="search" placeholder="Search name, item, department, or number" autocomplete="off">
+    <div class="filters">
+      <label class="mon">Month<input id="month" type="month"></label>
+      <div class="pills" id="pills">
+        <button data-f="all">All</button><button data-f="Open" class="on">Open</button><button data-f="Close">Close</button>
+      </div>
+    </div>
+    <div id="items"></div>
+    <div id="offline" class="empty" hidden>
+      <p>The backend is offline. Check your server connection.</p>
+      <button class="primary" id="btnRetry">Retry</button>
+    </div>
+  </section>
+</main>
+
+<nav class="bar">
+  <button id="btnNew" type="button">＋ New</button>
+  <button id="btnEdit" type="button">Edit</button>
+  <button id="btnDelete" type="button" class="danger">🗑 Delete</button>
+  <button id="btnSave" type="button" class="primary">💾 Save</button>
+</nav>
+<div id="toast" role="status"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

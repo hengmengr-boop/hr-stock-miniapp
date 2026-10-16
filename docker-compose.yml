@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: hr_stock
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+  app:
+    build: .
+    restart: always
+    env_file: .env
+    environment:
+      DB_HOST: db
+    depends_on: [db]
+    ports: ["127.0.0.1:3000:3000"]
+volumes:
+  pgdata:
