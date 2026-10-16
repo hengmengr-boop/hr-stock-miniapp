@@ -56,6 +56,7 @@ test('group message matches your format and escapes HTML', () => {
     remark: 'ស្កុតថ្លា', status: 'Close' }, { mentions: 'nhoung_somalin, @RA_Hengmeng', contact: 'Mr. RA Hengmeng' });
   for (const s of ['STOCK NOTIFICATION', 'Request No:</b> 1026-13', '@nhoung_somalin', '@RA_Hengmeng',
     'Date:</b> 06-Oct-2026', 'Time:</b> 08:41 AM', 'Ms.Ngy &lt;x&gt;', 'Qty:</b> 4 PCS', 'Status:</b> Close',
-    '<pre>If you have any questions', 'Mr. RA Hengmeng</pre>']) assert.ok(msg.includes(s), 'missing: ' + s);
+    'If you have any questions', 'contact:\nMr. RA Hengmeng']) assert.ok(msg.includes(s), 'missing: ' + s);
+  assert.ok(!msg.includes('<pre>'));
   assert.ok(!msg.includes('<x>'));
 });
