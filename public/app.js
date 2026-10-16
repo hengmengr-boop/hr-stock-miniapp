@@ -54,6 +54,8 @@ function syncButtons() {
   $('#formSet').disabled = !S.edit;
   document.querySelectorAll('#seg button').forEach((b) => (b.disabled = !isAdmin()));
   $('#btnSave').disabled = !S.edit || S.busy;
+  $('#btnSave').textContent = '💾 Save + Send';
+  $('#btnSave').title = 'Save request and send Telegram notification';
   $('#btnEdit').disabled = !S.sel || S.edit || !canModify(S.sel);
   $('#btnDelete').disabled = !S.sel || !canModify(S.sel);
   $('#btnNotify').hidden = !S.sel;
@@ -127,13 +129,21 @@ async function save() {
   if (S.busy) return;
   S.busy = true; syncButtons();
   try {
+    const wasEditing = Boolean(S.sel);
     const body = readForm();
     const j = S.sel
       ? await api('/requests/' + S.sel.id, { method: 'PUT', body })
       : await api('/requests', { method: 'POST', body });
-    toast(S.sel ? 'Updated' : 'Saved ' + j.row.request_no);
-    if (S.sel) { S.sel = j.row; fillForm(j.row); } else resetForm();
+    S.sel = j.row;
+    fillForm(j.row);
     await loadAll();
+
+    try {
+      await api(`/requests/${j.row.id}/notify`, { method: 'POST' });
+      toast(`${wasEditing ? 'Updated' : 'Saved ' + j.row.request_no} · Telegram notification sent`);
+    } catch (e) {
+      toast(`${wasEditing ? 'Updated' : 'Saved'} ${j.row.request_no}, but Telegram failed: ${e.message}`, true);
+    }
   } catch (e) { toast(e.message, true); }
   S.busy = false; syncButtons();
 }

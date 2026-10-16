@@ -253,7 +253,6 @@ app.post('/api/requests', auth, ah(async (req, res) => {
      v.total, v.request_date, v.status, v.remark]);
   const row = await getView(ins.rows[0].id);
   broadcast('created', row);
-  if (AUTO_NOTIFY === 'true') sendNotification(row).catch((e) => console.error('auto notify:', e.message));
   res.status(201).json({ row });
 }));
 

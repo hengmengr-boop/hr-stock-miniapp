@@ -90,16 +90,11 @@ test('/api/me: seeded admin and auto-registered requester', async () => {
   const a = await call('GET', '/api/me', admin); assert.equal(a.json.user.role, 'hr_admin'); assert.equal(a.json.departments.length, 2);
   const s = await call('GET', '/api/me', staff); assert.equal(s.json.user.role, 'requester'); assert.equal(s.json.user.full_name, 'Ngy Sreynuch');
 });
-test('requester creates request: forced Open, numbered, auto-notifies group', async () => {
+test('requester creates request: forced Open and numbered; Save sends notification separately', async () => {
   const r = await call('POST', '/api/requests', staff, { ...body, status: 'Close' });
   assert.equal(r.status, 201); assert.equal(r.json.row.status, 'Open'); assert.equal(r.json.row.request_no, '1026-1');
-  await new Promise((x) => setTimeout(x, 20));
-  assert.equal(telegramCalls.length, 1);
-  const t = telegramCalls[0]; assert.ok(t.url.includes('/bot' + TOKEN + '/sendMessage'));
-  assert.equal(t.body.chat_id, '-1003996807903'); assert.equal(t.body.parse_mode, 'HTML');
-  for (const s of ['1026-1', '@nhoung_somalin', 'Scotch tape', '4 PCS', 'ស្កុតថ្លា']) assert.ok(t.body.text.includes(s), s);
+  assert.equal(telegramCalls.length, 0);
   assert.deepEqual(emitted.at(-1), ['requests:changed', { action: 'created', id: 1 }]);
-  assert.equal(db.notifications.at(-1).success, true);
 });
 test('validation errors return 400', async () => {
   const r = await call('POST', '/api/requests', staff, { ...body, item: '', qty: 0 });
